@@ -1,0 +1,26 @@
+{
+  "name": "innodfamslackbot",
+  "version": "1.0.0",
+  "description": "innod fam point slack bot",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adwithi28/innodfamslackbot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/adwithi28/innodfamslackbot/issues"
+  },
+  "homepage": "https://github.com/adwithi28/innodfamslackbot#readme",
+  "dependencies": {
+    "@slack/bolt": "^4.7.3",
+    "@supabase/supabase-js": "^2.108.2",
+    "dotenv": "^17.4.2"
+  }
+}
