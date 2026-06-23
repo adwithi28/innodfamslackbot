@@ -1,5 +1,19 @@
 require("dotenv").config();
 
+const required = [
+  "SLACK_BOT_TOKEN",
+  "SLACK_APP_TOKEN",
+  "SLACK_SIGNING_SECRET",
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY"
+];
+
+for (const key of required) {
+  if (!process.env[key]) {
+    throw new Error(`Missing environment variable: ${key}`);
+  }
+}
+
 const { App } = require("@slack/bolt");
 const { createClient } = require("@supabase/supabase-js");
 
