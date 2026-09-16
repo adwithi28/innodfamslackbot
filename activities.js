@@ -6,7 +6,7 @@ function extractActivities(caption, senderId) {
   const items = [];
   // Split at category markers as well as explicit separators. A leading bare tag
   // list is the club's snipe convention; tags after a category belong to that item.
-  const marker = /\b(?:reach[ -]?out\s+(?:cc|coffee(?:\s+chat)?)|coffee(?:\s+chat)?|cc|big[ /-]little|fam\s+hangout|hangout|snipes?|sniped)\b/gi;
+  const marker = /\b(?:assigned\s+(?:cc|coffee\s+chat)|reach[ -]?out\s+(?:cc|coffee(?:\s+chat)?)|coffee(?:\s+chat)?|cc|big[ /-]little|fam\s+hangout|hangout|snipes?|sniped)\b/gi;
   const segments = [];
   for (const line of (caption || '').split(/[+;\n]+/)) {
     const matches = [...line.matchAll(marker)];
@@ -22,7 +22,7 @@ function extractActivities(caption, senderId) {
     if (isSnipe && ids.length) {
       for (const target of ids) items.push({ category: 'Snipe', recipientSlackIds: [senderId], targetSlackId: target, evidence: segment.text.trim(), issues: target === senderId ? ['Sender is also the snipe target; verify this occurrence.'] : [] });
     } else if (segment.category && !isSnipe) {
-      const category = /reach/.test(segment.category) ? 'Reach-out Coffee Chat' : /coffee|^cc$/.test(segment.category) ? 'Coffee Chat' : /big/.test(segment.category) ? 'Big Little' : 'Fam Hangout';
+      const category = /^assigned/.test(segment.category) ? 'Assigned Coffee Chat' : /reach|coffee|^cc$/.test(segment.category) ? 'Reach-out Coffee Chat' : /big/.test(segment.category) ? 'Big Little' : 'Fam Hangout';
       items.push({ category, recipientSlackIds: [...new Set([senderId, ...ids])], evidence: segment.text.trim(), issues: ids.length ? [] : ['No tagged participant; select recipients before approving.'] });
     } else {
       items.push({ category: isSnipe ? 'Snipe' : null, recipientSlackIds: isSnipe ? [senderId] : [], evidence: segment.text.trim(), issues: ['Caption is ambiguous. Split activities and confirm recipients manually.'] });
@@ -35,7 +35,7 @@ function extractActivities(caption, senderId) {
 function matchTask(category, tasks) {
   const aliases = {
     'Snipe': ['snipe', 'snipes'],
-    'Coffee Chat': ['coffee chat', 'cc'],
+    'Assigned Coffee Chat': ['assigned coffee chat', 'assigned cc'],
     'Reach-out Coffee Chat': ['reach out coffee chat', 'reachout coffee chat', 'reach out cc', 'reachout cc'],
     'Big Little': ['big little'], 'Fam Hangout': ['fam hangout', 'hangout']
   };

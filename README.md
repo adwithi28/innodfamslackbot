@@ -13,3 +13,5 @@ Use `+`, semicolons, newlines, or explicit category markers to separate activiti
 Slack edits update pending submissions. Edits to reviewed submissions flag them without changing awarded points. Database transactions handle duplicate events and partial failures. A thread reply lists the extracted activities; no points are awarded until approval.
 
 Run `npm test` for the caption and mocked message-handler regression tests. These tests do not access Slack or Supabase.
+
+Keyword rules: `cc` and `coffee chat` default to Reach-out Coffee Chat. `assigned cc` and `assigned coffee chat` select Assigned Coffee Chat. A bare tag remains a snipe target, credited to the sender. Task names must match the category aliases; missing or ambiguous tasks are flagged for review.

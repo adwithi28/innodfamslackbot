@@ -2,6 +2,32 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { extractActivities, matchTask, normalizeMessage } = require('./activities');
 
+test('coffee keywords distinguish reach-out from assigned chats', () => {
+  for (const keyword of ['cc', 'coffee chat', 'CC', 'reach out cc']) {
+    const items = extractActivities(`${keyword} with <@UA>`, 'UJ');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].category, 'Reach-out Coffee Chat');
+    assert.deepEqual(items[0].recipientSlackIds, ['UJ', 'UA']);
+  }
+  for (const keyword of ['assigned cc', 'assigned coffee chat', 'ASSIGNED CC']) {
+    const items = extractActivities(`${keyword} with <@UA>`, 'UJ');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].category, 'Assigned Coffee Chat');
+    assert.deepEqual(items[0].recipientSlackIds, ['UJ', 'UA']);
+  }
+});
+test('bare tags, assigned cc, and default cc stay separate in one message', () => {
+  const items = extractActivities('<@UA> <@UB> + assigned cc <@UC> + coffee chat <@UD>', 'UJ');
+  assert.deepEqual(items.map(i => i.category), ['Snipe', 'Snipe', 'Assigned Coffee Chat', 'Reach-out Coffee Chat']);
+  assert.deepEqual(items.map(i => i.recipientSlackIds), [['UJ'], ['UJ'], ['UJ', 'UC'], ['UJ', 'UD']]);
+});
+test('assigned and reach-out task IDs remain distinct', () => {
+  const tasks = [{id:'a',name:'Assigned CC'}, {id:'r',name:'Reach Out Coffee Chat'}];
+  assert.equal(matchTask('Assigned Coffee Chat', tasks).id, 'a');
+  assert.equal(matchTask('Reach-out Coffee Chat', tasks).id, 'r');
+  assert.equal(matchTask('Assigned Coffee Chat', [tasks[1]]), null);
+});
+
 test('Julia screenshot: five sender awards and a separate reach-out coffee chat', () => {
   const items = extractActivities('<@UA> <@UJES> <@UJON> <@UR> <@UAD> +reach out cc with <@UC>', 'UJULIA');
   assert.equal(items.length, 6);
