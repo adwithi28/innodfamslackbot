@@ -52,37 +52,6 @@ function normalizeName(name) {
     .trim();
 }
 
-function getTaggedSlackIds(text) {
-  return [...(text || "").matchAll(/<@([A-Z0-9]+)>/g)].map(match => match[1]);
-}
-
-function inferActivities(text, fileCount) {
-  const t = (text || "").toLowerCase();
-  const activities = [];
-
-  if (/\bcc\b|coffee chat|coffee/.test(t)) activities.push("Coffee Chat");
-  if (/big little|big\/little|big-little/.test(t)) activities.push("Big Little");
-  if (/fam hangout|hangout/.test(t)) activities.push("Fam Hangout");
-
-  if (activities.length === 0 && fileCount > 0) activities.push("Snipe");
-
-  return [...new Set(activities)];
-}
-
-function findMembersNamedInCaption(caption, members) {
-  const text = normalizeName(caption);
-
-  return (members || []).filter(member => {
-    const fullName = normalizeName(member.name);
-    const firstName = normalizeName(member.name.split(" ")[0]);
-
-    return (
-      (fullName.length > 2 && text.includes(fullName)) ||
-      (firstName.length > 2 && text.includes(firstName))
-    );
-  });
-}
-
 async function getSlackName(client, slackUserId) {
   const result = await client.users.info({ user: slackUserId });
   const profile = result.user.profile || {};
@@ -97,28 +66,30 @@ async function getSlackName(client, slackUserId) {
 }
 
 async function findOrLinkMemberBySlackUser(client, slackUserId, allMembers) {
-  const alreadyLinked = (allMembers || []).find(
+  const linked = (allMembers || []).filter(
     m => m.slack_user_id === slackUserId
   );
-
-  if (alreadyLinked) return alreadyLinked;
+  if (linked.length) return linked.length === 1 ? linked[0] : null;
 
   const slackName = await getSlackName(client, slackUserId);
   const normalizedSlackName = normalizeName(slackName);
 
-  const matched = (allMembers || []).find(
-    m => normalizeName(m.name) === normalizedSlackName
+  const matches = (allMembers || []).filter(
+    m => !m.slack_user_id && normalizeName(m.name) === normalizedSlackName
   );
+  const matched = matches.length === 1 ? matches[0] : null;
 
   if (!matched) return null;
 
-  await supabase
+  const { error: linkError } = await supabase
     .from("members")
     .update({
       slack_user_id: slackUserId,
       slack_display_name: slackName,
     })
     .eq("id", matched.id);
+
+  if (linkError) throw linkError;
 
   return {
     ...matched,
@@ -177,219 +148,77 @@ async function uploadSlackFileToSupabase(file) {
   return data.publicUrl;
 }
 
-app.message(async ({ message, client, say }) => {
-  console.log("MESSAGE:", {
-    text: message.text,
-    channel: message.channel,
-    hasFiles: !!message.files,
-    files: message.files?.length || 0,
-    subtype: message.subtype,
-  });
+const { extractActivities, matchTask, normalizeMessage } = require("./activities");
 
-  if (message.subtype && message.subtype !== "file_share") return;
-
-  const hasFiles = message.files && message.files.length > 0;
-
-  if (!hasFiles) {
-    console.log("Ignoring message with no files.");
-    return;
-  }
-
+app.event("message", async ({ event, client }) => {
+  const message = normalizeMessage(event);
+  if (!message?.user || !message.ts || !message.channel) return;
   try {
-    console.log("STARTING SUBMISSION PROCESS");
-
-    const activeSemesterId = await getActiveSemesterId();
-    console.log("Active semester:", activeSemesterId);
-
-    const caption = message.text || "";
-    const activityNames = inferActivities(caption, message.files.length);
-
-    console.log("UPLOADING IMAGES");
-
-    const imageUrls = [];
-
-    for (const file of message.files) {
-      const publicUrl = await uploadSlackFileToSupabase(file);
-      imageUrls.push(publicUrl);
+    const { data: existing, error: lookupError } = await supabase
+      .from("point_submissions").select("id, source_version, source_files, semester_id")
+      .eq("slack_channel_id", message.channel).eq("slack_message_ts", message.ts).maybeSingle();
+    if (lookupError) throw lookupError;
+    if (existing?.source_version && Number(existing.source_version) >= Number(message.sourceVersion)) return;
+    const files = (message.files || []).filter(f => f.mimetype?.startsWith("image/"));
+    if (!files.length && !existing) return;
+    const semesterId = existing?.semester_id || await getActiveSemesterId();
+    const [{ data: members, error: membersError }, { data: tasks, error: tasksError }] = await Promise.all([
+      supabase.from("members").select("id, name, slack_user_id, slack_display_name"),
+      supabase.from("tasks").select("id, name, points")
+    ]);
+    if (membersError || tasksError) throw membersError || tasksError;
+    const parsed = extractActivities(message.text || "", message.user);
+    const resolved = new Map();
+    for (const id of new Set(parsed.flatMap(item => [...item.recipientSlackIds, item.targetSlackId].filter(Boolean)))) {
+      resolved.set(id, await findOrLinkMemberBySlackUser(client, id, members));
     }
-
-    console.log("Detected activities:", activityNames);
-
-    const { data: existing, error: existingError } = await supabase
-      .from("point_submissions")
-      .select("id")
-      .eq("slack_message_ts", message.ts)
-      .maybeSingle();
-
-    if (existingError) throw existingError;
-
-    if (existing) {
-      console.log("Submission already exists.");
-      await addReaction(client, message.channel, message.ts, "eyes");
-      return;
-    }
-
-    console.log("FETCHING MEMBERS");
-
-    const { data: allMembers, error: membersError } = await supabase
-      .from("members")
-      .select(
-        "id, name, slack_user_id, slack_display_name, member_semesters(fam_id, semester_id)"
-      );
-
-    if (membersError) throw membersError;
-
-    console.log("Members loaded:", allMembers?.length || 0);
-
-    const taggedSlackIds = getTaggedSlackIds(caption);
-    const matchedMembers = [];
-
-    for (const slackId of taggedSlackIds) {
-      const member = await findOrLinkMemberBySlackUser(client, slackId, allMembers);
-
-      if (member && !matchedMembers.find(m => m.id === member.id)) {
-        matchedMembers.push(member);
-      }
-    }
-
-    const typedNameMembers = findMembersNamedInCaption(caption, allMembers);
-
-    for (const member of typedNameMembers) {
-      if (!matchedMembers.find(m => m.id === member.id)) {
-        matchedMembers.push(member);
-      }
-    }
-
-    const senderMember = await findOrLinkMemberBySlackUser(
-      client,
-      message.user,
-      allMembers
-    );
-
-    if (senderMember && !matchedMembers.find(m => m.id === senderMember.id)) {
-      matchedMembers.push(senderMember);
-    }
-
-    console.log(
-      "Matched members:",
-      matchedMembers.map(m => m.name)
-    );
-
-    const famCounts = {};
-
-    for (const member of matchedMembers) {
-      const sem = (member.member_semesters || []).find(
-        ms => ms.semester_id === activeSemesterId
-      );
-
-      if (!sem?.fam_id) continue;
-
-      famCounts[sem.fam_id] = (famCounts[sem.fam_id] || 0) + 1;
-    }
-
-    console.log("Fam counts:", famCounts);
-
-    console.log("CREATING SUBMISSION");
-
-    const { data: submission, error: submissionError } = await supabase
-      .from("point_submissions")
-      .insert({
-        slack_message_ts: message.ts,
-        slack_channel_id: message.channel,
-        slack_user_id: message.user,
-        caption,
-        image_urls: imageUrls,
-        status: "pending",
-        semester_id: activeSemesterId,
-      })
-      .select()
-      .single();
-
-    if (submissionError) throw submissionError;
-
-    console.log("Submission created:", submission.id);
-
-    console.log("FETCHING TASKS");
-
-    const { data: tasks, error: tasksError } = await supabase
-      .from("tasks")
-      .select("id, name, points");
-
-    if (tasksError) throw tasksError;
-
-    console.log("Tasks loaded:", tasks?.length || 0);
-
-    for (const activityName of activityNames) {
-      const task = (tasks || []).find(
-        t => t.name.toLowerCase() === activityName.toLowerCase()
-      );
-
-      const { data: item, error: itemError } = await supabase
-        .from("point_submission_items")
-        .insert({
-          submission_id: submission.id,
-          inferred_task_id: task?.id || null,
-          final_task_id: task?.id || null,
-          confidence: task ? 0.8 : 0.3,
-          notes: `Detected: ${activityName}. Matched members: ${
-            matchedMembers.map(m => m.name).join(", ") || "none"
-          }.`,
-        })
-        .select()
-        .single();
-
-      if (itemError) throw itemError;
-
-      const memberRows = matchedMembers.map(member => ({
-        item_id: item.id,
-        member_id: member.id,
-      }));
-
-      if (memberRows.length > 0) {
-        const { error: memberInsertError } = await supabase
-          .from("point_submission_item_members")
-          .insert(memberRows);
-
-        if (memberInsertError) throw memberInsertError;
-      }
-
-      const countRows = Object.entries(famCounts).map(([famId, count]) => ({
-        item_id: item.id,
-        fam_id: famId,
-        member_count: count,
-      }));
-
-      if (countRows.length > 0) {
-        const { error: countError } = await supabase
-          .from("point_submission_item_fam_counts")
-          .insert(countRows);
-
-        if (countError) throw countError;
-      }
-    }
-
-    console.log("ADDING REACTION");
-
-    await addReaction(client, message.channel, message.ts, "eyes");
-
-    await say({
-      text: `👀 Added to Pending Logs. Detected: ${activityNames.join(
-        ", "
-      )}. Matched ${matchedMembers.length} member(s).`,
-      thread_ts: message.ts,
+    const items = parsed.map(activity => {
+      const task = matchTask(activity.category, tasks);
+      const issues = [...activity.issues];
+      if (!task) issues.push(`Select a task for ${activity.category || "this activity"}; no unique matching task was found.`);
+      for (const id of activity.recipientSlackIds) if (!resolved.get(id)) issues.push(`Recipient ${id} could not be matched to a member.`);
+      const target = resolved.get(activity.targetSlackId);
+      return {
+        inferred_task_id: task?.id || null, final_task_id: task?.id || null,
+        member_ids: [...new Set(activity.recipientSlackIds.map(id => resolved.get(id)?.id).filter(Boolean))],
+        target_slack_id: activity.targetSlackId || null,
+        target_name: target?.name || activity.targetSlackId || null,
+        confidence: issues.length ? 0.3 : 0.8,
+        needs_review: issues.length > 0,
+        notes: [activity.evidence, ...issues, "Photo-to-activity mapping is unconfirmed; review the submission photos."].filter(Boolean).join("\n")
+      };
     });
-
-    console.log("DONE");
+    const sourceFiles = [];
+    for (const file of files) {
+      const cached = (existing?.source_files || []).find(f => f.id === file.id);
+      sourceFiles.push(cached || { id: file.id, url: await uploadSlackFileToSupabase(file) });
+    }
+    const { data: result, error } = await supabase.rpc("save_slack_submission", {
+      p_submission: {
+        slack_message_ts: message.ts, slack_channel_id: message.channel,
+        slack_user_id: message.user, caption: message.text || "",
+        image_urls: sourceFiles.map(f => f.url), source_files: sourceFiles,
+        source_version: message.sourceVersion, semester_id: semesterId
+      }, p_items: items
+    });
+    if (error) throw error;
+    if (result === "unchanged") return;
+    await addReaction(client, message.channel, message.ts, result === "review_required" ? "warning" : "eyes");
+    const summary = items.map((item, index) => {
+      const category = parsed[index].category || "Needs review";
+      const names = item.member_ids.map(id => members.find(m => m.id === id)?.name || "Unmatched member");
+      return `• ${category}${item.target_name ? ` (target: ${item.target_name})` : ""}: ${names.join(", ") || "select recipients"}${item.needs_review ? " — review needed" : ""}`;
+    }).join("\n");
+    await client.chat.postMessage({
+      channel: message.channel, thread_ts: message.ts,
+      text: result === "review_required"
+        ? "⚠️ This message changed after review. Existing points are unchanged; check Pending Logs to reconcile the edit."
+        : `👀 ${items.length} activities saved to Pending Logs.\n${summary}`
+    });
+    console.log("Submission saved:", result, "activities:", items.length);
   } catch (err) {
-    console.error("Submission error full:", JSON.stringify(err, null, 2));
-    console.error("Submission error message:", err.message);
-
+    console.error("Submission failed:", err.message);
     await addReaction(client, message.channel, message.ts, "warning");
-
-    await say({
-      text: `⚠️ Could not add to Pending Logs: ${err.message}`,
-      thread_ts: message.ts,
-    });
   }
 });
 
