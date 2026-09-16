@@ -12,6 +12,13 @@ function extractActivities(caption, senderId) {
     const matches = [...line.matchAll(marker)];
     if (!matches.length) { if (line.trim()) segments.push({ text: line, category: null }); continue; }
     const prefix = line.slice(0, matches[0].index);
+    // A trailing category labels the preceding name/tag: "Anushka snipe".
+    // Keep the whole clause together instead of emitting a name-only item.
+    if (matches.length === 1 && prefix.trim() &&
+        /^[\s.!?,]*$/.test(line.slice(matches[0].index + matches[0][0].length))) {
+      segments.push({ text: line, category: normalize(matches[0][0]) });
+      continue;
+    }
     if (prefix.trim()) segments.push({ text: prefix, category: null });
     matches.forEach((m, i) => segments.push({ category: normalize(m[0]), text: line.slice(m.index, matches[i + 1]?.index ?? line.length) }));
   }
