@@ -2,6 +2,28 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { extractActivities, matchTask, normalizeMessage } = require('./activities');
 
+test('a name before snipe stays in one activity', () => {
+  const items = extractActivities('cc with aaron + anushka snipe', 'UJ');
+  assert.deepEqual(items.map(i => i.category), ['Reach-out Coffee Chat', 'Snipe']);
+  assert.equal(items[1].evidence, 'anushka snipe');
+  assert.deepEqual(items[1].recipientSlackIds, ['UJ']);
+  assert.ok(items.every(i => i.issues.length));
+});
+test('a trailing snipe category binds its tagged target without an extra item', () => {
+  const items = extractActivities('cc with <@UA> + <@UB> snipe!', 'UJ');
+  assert.deepEqual(items.map(i => i.category), ['Reach-out Coffee Chat', 'Snipe']);
+  assert.deepEqual(items[0].recipientSlackIds, ['UJ', 'UA']);
+  assert.equal(items[1].targetSlackId, 'UB');
+  assert.deepEqual(items[1].recipientSlackIds, ['UJ']);
+  assert.deepEqual(items[1].issues, []);
+});
+test('a trailing assigned coffee category applies to its preceding tag', () => {
+  const items = extractActivities('<@UA> assigned cc', 'UJ');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].category, 'Assigned Coffee Chat');
+  assert.deepEqual(items[0].recipientSlackIds, ['UJ', 'UA']);
+});
+
 test('coffee keywords distinguish reach-out from assigned chats', () => {
   for (const keyword of ['cc', 'coffee chat', 'CC', 'reach out cc']) {
     const items = extractActivities(`${keyword} with <@UA>`, 'UJ');
